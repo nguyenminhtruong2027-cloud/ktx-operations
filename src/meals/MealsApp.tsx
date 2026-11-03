@@ -25,6 +25,7 @@ import {
   bootstrapSupplierMenuDB,
   dayIndexFromDate,
   getShiftDetail,
+  getVendorWeekAsDayWeeklyMenu,
   hasPersistedStore,
   importWeeklyMenu,
   loadStore,
@@ -118,12 +119,14 @@ export default function MealsApp() {
   });
 
   // Current Active Weekly Menu (21 shifts)
-  const [weeklyMenu, setWeeklyMenu] = useState<DayWeeklyMenu[]>(() => {
+  // MA TRẬN KIỂM ĐỊNH (inspectionMatrix) — bảng tuần dùng chung cho tab Kiểm định,
+  // KHÔNG phải thực đơn của NCC nào. Thực đơn riêng từng NCC nằm trong CSDL supplier_menus.
+  const [inspectionMatrix, setInspectionMatrix] = useState<DayWeeklyMenu[]>(() => {
     const raw = localStorage.getItem(STORAGE_KEYS.WEEKLY_MENU);
     if (!raw) return TAM_PHUONG_WEEKLY_MENU;
     try {
       const parsed = JSON.parse(raw);
-      // Migrate: Ensure dateStr of each day in weeklyMenu matches calculated date from weekStartDate
+      // Migrate: Ensure dateStr of each day in inspectionMatrix matches calculated date from weekStartDate
       const daysInfo = getWeekDaysInfo(localStorage.getItem(STORAGE_KEYS.WEEK_START) || '2026-10-26');
       return parsed.map((item: DayWeeklyMenu, idx: number) => ({
         ...item,
@@ -172,8 +175,8 @@ export default function MealsApp() {
   }, [vendors]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.WEEKLY_MENU, JSON.stringify(weeklyMenu));
-  }, [weeklyMenu]);
+    localStorage.setItem(STORAGE_KEYS.WEEKLY_MENU, JSON.stringify(inspectionMatrix));
+  }, [inspectionMatrix]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.RULES, JSON.stringify(rules));
@@ -234,7 +237,7 @@ export default function MealsApp() {
     setSupplierMenus(bootstrapSupplierMenuDB({
       weekStart: weekStartDate,
       defaultShiftName: reportShift,
-      weeklyMenu,
+      weeklyMenu: inspectionMatrix,
       archives,
       mealsByVendorId: oldMealsByVendor,
       vendors
@@ -316,6 +319,27 @@ export default function MealsApp() {
   const [filterShift, setFilterShift] = useState<string>('all');
   const [selectedVendorForMenu, setSelectedVendorForMenu] = useState<string>('tam-phuong');
 
+  // Thực đơn RIÊNG của NCC đang chọn (tab "Thực đơn nhà cung cấp") — đọc từ CSDL
+  // supplier_menus theo vendorId + tuần. KHÔNG fallback sang Tám Phương hay NCC khác:
+  // NCC chưa có dữ liệu → tuần rỗng (trạng thái "Chưa có thực đơn cho NCC này").
+  const selectedVendorWeekMenu = useMemo(
+    () => getVendorWeekAsDayWeeklyMenu(supplierMenus, selectedVendorForMenu, weekStartDate),
+    [supplierMenus, selectedVendorForMenu, weekStartDate]
+  );
+  const selectedVendorHasMenu = useMemo(
+    () => selectedVendorWeekMenu.some(d =>
+      (['breakfast', 'lunch', 'dinner'] as const).some(k => d[k].meatDishes.length > 0 || d[k].vegDishes.length > 0)
+    ),
+    [selectedVendorWeekMenu]
+  );
+
+  // Mô tả ngắn nội dung 1 ca — dùng cho hộp xác nhận ghi đè (B1.4)
+  const describeMealDetail = (d?: ShiftMealDetail | null): string => {
+    if (!d || (d.meatDishes.length === 0 && d.vegDishes.length === 0)) return '(trống)';
+    const short = (list: string[]) => list.slice(0, 2).map(x => x.split(' (')[0]).join(', ') + (list.length > 2 ? ', …' : '');
+    return `${d.meatDishes.length} món mặn (${short(d.meatDishes)}), ${d.vegDishes.length} món chay (${short(d.vegDishes)}), tráng miệng: ${d.meatDessert || '—'}`;
+  };
+
   // Tab 4 (Kiểm định) Sub-sections & Controls
   const [evalRuleTab, setEvalRuleTab] = useState<'portions' | 'summer23'>('portions');
   const [summerSearch, setSummerSearch] = useState('');
@@ -373,10 +397,10 @@ export default function MealsApp() {
 
   // Áp dụng kết quả wizard trích xuất: ghi theo giao dịch + lưu lịch sử archive
   const handleWizardApply = (payload: WizardApplyPayload) => {
-    const snap = saveUndoSnapshot(weeklyMenu);
+    const snap = saveUndoSnapshot(inspectionMatrix);
     setUndoInfo({ id: snap.id, expiresAt: snap.expiresAt });
 
-    setWeeklyMenu(payload.finalMenu);
+    setInspectionMatrix(payload.finalMenu);
 
     const modeLabel = APPLY_MODES.find(m => m.id === payload.mode)?.label || payload.mode;
     const newArchive: UploadedMenuFile = {
@@ -412,7 +436,7 @@ export default function MealsApp() {
   const handleUndoApply = () => {
     const snap = popUndoSnapshot();
     if (snap) {
-      setWeeklyMenu(snap.menu);
+      setInspectionMatrix(snap.menu);
       showToast('Đã hoàn tác — thực đơn đã phục hồi về trạng thái trước khi áp dụng.');
     }
     discardUndoSnapshot();
@@ -494,7 +518,7 @@ export default function MealsApp() {
 
   // Sync menu dates whenever weekStartDate changes
   useEffect(() => {
-    setWeeklyMenu(prev => {
+    setInspectionMatrix(prev => {
       return prev.map((day, idx) => ({
         ...day,
         dayOfWeek: weekDays[idx]?.dayOfWeek || day.dayOfWeek,
@@ -583,13 +607,13 @@ export default function MealsApp() {
 
   // Run Rule Engine for Tab 4 (Kiểm định)
   const evaluationResult = useMemo(() => {
-    return evaluateMenuWeekly(weeklyMenu, rules);
-  }, [weeklyMenu, rules]);
+    return evaluateMenuWeekly(inspectionMatrix, rules);
+  }, [inspectionMatrix, rules]);
 
   // Detect duplicate dishes across other uploaded menu files (excluding currently selected file)
   const duplicateDishes = useMemo(() => {
-    return detectDuplicateDishes(weeklyMenu, archives, selectedFileId);
-  }, [weeklyMenu, archives, selectedFileId]);
+    return detectDuplicateDishes(inspectionMatrix, archives, selectedFileId);
+  }, [inspectionMatrix, archives, selectedFileId]);
 
   // Thông tin file thực đơn hiện đang được chọn kiểm định
   const activeUploadedFile = useMemo(() => {
@@ -618,7 +642,7 @@ export default function MealsApp() {
     const target = archives.find(f => f.id === fileId);
     if (!target) return;
     setSelectedFileId(fileId);
-    setWeeklyMenu(target.menu);
+    setInspectionMatrix(target.menu);
     setArchives(prev => prev.map(f => ({ ...f, isActive: f.id === fileId })));
     // Đồng bộ nội dung file vào CSDL supplier_menus theo NCC + tuần của file
     syncStoreMenu(
@@ -647,7 +671,7 @@ export default function MealsApp() {
     if (selectedFileId === fileId) {
       if (remaining.length > 0) {
         setSelectedFileId(remaining[0].id);
-        setWeeklyMenu(remaining[0].menu);
+        setInspectionMatrix(remaining[0].menu);
         setArchives(remaining.map((f, idx) => ({ ...f, isActive: idx === 0 })));
       }
     }
@@ -658,8 +682,8 @@ export default function MealsApp() {
   // Lưu thực đơn hiện tại thành file lưu trữ
   const handleSaveCurrentWeekToArchive = () => {
     const newFileId = `file-${Date.now()}`;
-    const dateRangeStr = weeklyMenu.length >= 7 
-      ? `${weeklyMenu[0].dateStr} - ${weeklyMenu[6].dateStr}`
+    const dateRangeStr = inspectionMatrix.length >= 7 
+      ? `${inspectionMatrix[0].dateStr} - ${inspectionMatrix[6].dateStr}`
       : `${formattedDateStr}`;
     // MA TRẬN TUẦN thuộc về NCC đang sở hữu file active — KHÔNG cho phép sao chép chéo sang NCC khác
     const ownerVendorId = activeUploadedFile?.vendorId || selectedVendorForMenu || 'tam-phuong';
@@ -669,17 +693,17 @@ export default function MealsApp() {
       fileType: 'excel',
       fileSize: '35.0 KB',
       dateRange: dateRangeStr,
-      startDate: weeklyMenu[0]?.dateStr || formattedDateStr,
-      endDate: weeklyMenu[weeklyMenu.length - 1]?.dateStr || formattedDateStr,
+      startDate: inspectionMatrix[0]?.dateStr || formattedDateStr,
+      endDate: inspectionMatrix[inspectionMatrix.length - 1]?.dateStr || formattedDateStr,
       vendorId: ownerVendorId,
       vendorName: vendors.find(v => v.id === ownerVendorId)?.name || 'Tám Phương',
       uploadedAt: new Date().toLocaleDateString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }),
       isActive: true,
-      menu: JSON.parse(JSON.stringify(weeklyMenu))
+      menu: JSON.parse(JSON.stringify(inspectionMatrix))
     };
     setSelectedFileId(newFileId);
     setArchives(prev => [newArchive, ...prev.map(f => ({ ...f, isActive: false }))]);
-    syncStoreMenu(newArchive.vendorId, weekStartDate, weeklyMenu, 'archive', newFileId);
+    syncStoreMenu(newArchive.vendorId, weekStartDate, inspectionMatrix, 'archive', newFileId);
     showToast('Đã lưu trữ thực đơn vào danh sách file thành công!');
   };
 
@@ -717,13 +741,19 @@ export default function MealsApp() {
     0
   );
 
-  const applyInspectionResult = (result: ParseResult, file: File, source: 'ai' | 'excel' | 'text') => {
+  // Ghi kết quả upload vào CSDL supplier_menus CỦA ĐÚNG NCC được chọn (isolated):
+  // • KHÔNG thay ma trận kiểm định (inspectionMatrix) bằng nội dung của NCC.
+  // • KHÔNG đụng dữ liệu của NCC khác.
+  const applyInspectionResult = (result: ParseResult, file: File, source: 'ai' | 'excel' | 'text', targetVendorId?: string) => {
     const menu = parsedDaysToWeeklyMenu(result.days, result.weekStartDate);
     const newFileId = `file-${Date.now()}`;
     const fileType: UploadedMenuFile['fileType'] =
       result.sourceType === 'csv' ? 'csv'
         : (result.sourceType === 'image' || result.sourceType === 'pdf') ? 'image'
           : result.sourceType === 'text' ? 'manual' : 'excel';
+
+    // NCC đích do luồng upload chỉ định (ưu tiên tuyệt đối) — không nhận diện chéo
+    const ownerVendorId = targetVendorId || result.supplierId || selectedVendorForMenu || 'tam-phuong';
 
     const newArchive: UploadedMenuFile = {
       id: newFileId,
@@ -733,17 +763,16 @@ export default function MealsApp() {
       dateRange: getWeekRangeStr(result.weekStartDate),
       startDate: result.weekStartDate,
       endDate: formatISODate(getDateOfDayInWeek(result.weekStartDate, 6)),
-      vendorId: result.supplierId || selectedVendorForMenu || 'tam-phuong',
-      vendorName: result.supplierName || vendors.find(v => v.id === selectedVendorForMenu)?.name || 'Tám Phương',
+      vendorId: ownerVendorId,
+      vendorName: vendors.find(v => v.id === ownerVendorId)?.name || result.supplierName || 'Tám Phương',
       uploadedAt: formatDMY(new Date()),
       isActive: true,
       menu
     };
 
     setSelectedFileId(newFileId);
-    setWeeklyMenu(menu);
     setArchives(prev => [newArchive, ...prev.map(f => ({ ...f, isActive: false }))]);
-    syncStoreMenu(newArchive.vendorId, result.weekStartDate, menu, source, newFileId);
+    syncStoreMenu(ownerVendorId, result.weekStartDate, menu, source, newFileId);
 
     const dishCount = totalDishesOfResult(result);
     showToast(`Đã đọc ${file.name}: ${dishCount} món trên ${menu.length * 3} ca${result.warnings.length ? ` • ${result.warnings.length} cảnh báo cần rà` : ''}.`);
@@ -766,13 +795,13 @@ export default function MealsApp() {
       if (isImage || isPdf) {
         showToast(`Đang trích xuất ${file.name} bằng AI (OCR Gemini)...`);
         result = await extractMenuWithGemini(file, { weekStartDate });
-        applyInspectionResult(result, file, 'ai');
+        applyInspectionResult(result, file, 'ai', selectedVendorForMenu);
       } else if (isSheet) {
         result = await parseExcelOrCsvFile(file, weekStartDate, selectedVendorForMenu);
-        applyInspectionResult(result, file, 'excel');
+        applyInspectionResult(result, file, 'excel', selectedVendorForMenu);
       } else if (isText) {
         result = await parsePlainTextMenu(await file.text(), weekStartDate, selectedVendorForMenu);
-        applyInspectionResult(result, file, 'text');
+        applyInspectionResult(result, file, 'text', selectedVendorForMenu);
       } else {
         const extMatch = lower.match(/\.([a-z0-9]+)$/);
         throw new StructuredFileError(
@@ -826,7 +855,7 @@ export default function MealsApp() {
     setRemapping(true);
     try {
       const result = await parseWithManualMap(pendingFile, columnMap, weekStartDate, selectedVendorForMenu);
-      applyInspectionResult(result, pendingFile, 'excel');
+      applyInspectionResult(result, pendingFile, 'excel', selectedVendorForMenu);
       setFileIssue(null);
       setSheetSnap(null);
     } catch (err) {
@@ -906,7 +935,7 @@ export default function MealsApp() {
           ['Bảng cần có nhãn ca/ngày hoặc cột món; thử "Chọn cột thủ công" hoặc dùng ảnh/PDF với AI.']
         );
       }
-      applyInspectionResult(result, file, isImage || isPdf ? 'ai' : isSheet ? 'excel' : 'text');
+      applyInspectionResult(result, file, isImage || isPdf ? 'ai' : isSheet ? 'excel' : 'text', archiveUploadVendor);
       if (parseDateSafe(weekStartDate).getTime() !== parseDateSafe(result.weekStartDate).getTime()) {
         setWeekStartDate(result.weekStartDate);
       }
@@ -921,7 +950,7 @@ export default function MealsApp() {
     if (!target) return;
     const monday = formatISODate(getMondayOfDate(parseDateSafe(target.startDate || weekStartDate)));
     setSelectedFileId(target.id);
-    setWeeklyMenu(target.menu);
+    setInspectionMatrix(target.menu);
     setWeekStartDate(prev => (parseDateSafe(prev).getTime() === parseDateSafe(monday).getTime() ? prev : monday));
     setArchives(prev => prev.map(f => ({ ...f, isActive: f.id === fileId })));
     syncStoreMenu(target.vendorId || 'tam-phuong', monday, target.menu, 'archive', target.id);
@@ -1034,7 +1063,7 @@ export default function MealsApp() {
     if (manualReassignMode) {
       const target = archives.find(f => f.id === selectedFileId) || archives.find(f => f.isActive);
       if (target) {
-        setWeeklyMenu(menu);
+        setInspectionMatrix(menu);
         setArchives(prev => prev.map(f => (f.id === target.id ? { ...f, menu } : f)));
         syncStoreMenu(
           target.vendorId || 'tam-phuong',
@@ -1067,7 +1096,7 @@ export default function MealsApp() {
       menu
     };
     setSelectedFileId(newFileId);
-    setWeeklyMenu(menu);
+    setInspectionMatrix(menu);
     setArchives(prev => [newArchive, ...prev.map(f => ({ ...f, isActive: false }))]);
     syncStoreMenu(newArchive.vendorId, weekStartDate, menu, 'text', newFileId);
     setManualEntryOpen(false);
@@ -1087,7 +1116,7 @@ export default function MealsApp() {
   // PHÂN BỔ LẠI CA: nạp thực đơn hiện tại vào bảng cắt dòng linh hoạt
   const openManualReassign = () => {
     const entry: Record<number, ManualDayEntry> = {};
-    weeklyMenu.forEach((day, i) => {
+    inspectionMatrix.forEach((day, i) => {
       entry[i] = {
         sang: serializeShiftDetail(day.breakfast),
         trua: serializeShiftDetail(day.lunch),
@@ -1219,7 +1248,7 @@ export default function MealsApp() {
                   if (active) {
                     const activeMonday = formatISODate(getMondayOfDate(parseDateSafe(active.startDate || weekStartDate)));
                     setSelectedFileId(active.id);
-                    setWeeklyMenu(active.menu);
+                    setInspectionMatrix(active.menu);
                     setWeekStartDate(prev => (parseDateSafe(prev).getTime() === parseDateSafe(activeMonday).getTime() ? prev : activeMonday));
                     setArchives(prev => prev.map(f => ({ ...f, isActive: f.id === active.id })));
                   }
@@ -1772,13 +1801,13 @@ export default function MealsApp() {
                   </div>
 
                   <span className="px-2.5 py-1 bg-teal-50 text-teal-800 font-bold text-xs rounded-xl border border-teal-200">
-                    {weeklyMenu.length * 2}/14 ca chính đã kiểm định
+                    {inspectionMatrix.length * 2}/14 ca chính đã kiểm định
                   </span>
                 </div>
 
                 {/* Warning details list */}
                 <div className="space-y-3">
-                  {weeklyMenu.flatMap((day, dIdx) => [
+                  {inspectionMatrix.flatMap((day, dIdx) => [
                     { day, shiftName: 'Bữa trưa', detail: day.lunch, dIdx, shiftKey: 'lunch' as const },
                     { day, shiftName: 'Bữa tối', detail: day.dinner, dIdx, shiftKey: 'dinner' as const }
                   ]).map((item, idx) => {
@@ -2707,11 +2736,25 @@ export default function MealsApp() {
                       type="button"
                       onClick={() => {
                         const targetVendor = vendors.find(v => v.id === activeVendorForEdit) || vendors[0];
-                        // Tìm món của thứ đang chọn trong weeklyMenu
-                        const dayData = weeklyMenu.find(d => d.dayOfWeek === dayOfWeekStr) || weeklyMenu[0];
+                        // Nguồn: ma trận kiểm định (inspectionMatrix) — KHÁC nguồn với thực đơn riêng NCC
+                        const dayData = inspectionMatrix.find(d => d.dayOfWeek === dayOfWeekStr) || inspectionMatrix[0];
                         const shiftKey = reportShift === 'Bữa sáng' ? 'breakfast' : reportShift === 'Bữa trưa' ? 'lunch' : 'dinner';
-                        const originalDetail = dayData[shiftKey];
-                        updateVendorShiftDetail(activeVendorForEdit, reportDayIdx, reportDayShiftKey, JSON.parse(JSON.stringify(originalDetail)));
+                        const originalDetail = JSON.parse(JSON.stringify(dayData[shiftKey])) as ShiftMealDetail;
+
+                        // B1.4 — xác nhận nếu sẽ GHI ĐÈ slot đã có dữ liệu (nêu rõ nội dung bị thay)
+                        const existing = getShiftDetail(supplierMenus, activeVendorForEdit, weekStartDate, reportDayIdx, reportShiftKey);
+                        const willReplace = Boolean(existing && JSON.stringify(existing) !== JSON.stringify(originalDetail));
+                        if (willReplace) {
+                          const ok = confirm(
+                            `"Nạp lại menu gốc" sẽ GHI ĐÈ thực đơn riêng của ${targetVendor.name} — ${dayOfWeekStr} (${reportShift}):\n\n` +
+                            `• Hiện tại: ${describeMealDetail(existing)}\n` +
+                            `• Sẽ thay bằng (nguồn ma trận kiểm định): ${describeMealDetail(originalDetail)}\n\n` +
+                            `Tiếp tục?`
+                          );
+                          if (!ok) return;
+                        }
+
+                        updateVendorShiftDetail(activeVendorForEdit, reportDayIdx, reportDayShiftKey, originalDetail);
                         showToast(`Đã nạp lại menu gốc cho ${targetVendor.name}!`);
                       }}
                       className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition"
@@ -2816,48 +2859,52 @@ export default function MealsApp() {
             </div>
           )}
 
-          {/* TAB: THỰC ĐƠN NHÀ CUNG CẤP & MA TRẬN TUẦN 21 CA */}
-          {activeTab === 'menu' && (
+          {/* TAB: THỰC ĐƠN NHÀ CUNG CẤP — hiển thị RIÊNG từng NCC từ CSDL supplier_menus */}
+          {activeTab === 'menu' && !selectedVendorHasMenu ? (
+            /* Trạng thái rỗng: NCC chưa có thực đơn riêng — KHÔNG fallback sang Tám Phương/NCC khác */
+            <div className="bg-white rounded-2xl border-2 border-dashed border-slate-300 shadow-xs p-10 text-center space-y-3">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-100 flex items-center justify-center">
+                <FileSpreadsheet className="w-7 h-7 text-slate-400" />
+              </div>
+              <h3 className="text-sm font-extrabold text-slate-900">Chưa có thực đơn cho NCC này</h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                {vendors.find(v => v.id === selectedVendorForMenu)?.name} chưa có thực đơn nào trong tuần {getWeekRangeStr(weekStartDate)}.
+                Hãy tải file thực đơn để bắt đầu — dữ liệu được lưu riêng cho NCC này, không ảnh hưởng NCC khác.
+              </p>
+              <button
+                onClick={() => setAutomationWizard({
+                  lockedVendorId: selectedVendorForMenu,
+                  lockedVendorName: vendors.find(v => v.id === selectedVendorForMenu)?.name
+                })}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 bg-gradient-to-r from-(--vc-accent-1) to-(--vc-accent-2) text-slate-950 rounded-xl text-xs font-bold shadow-md transition hover:brightness-105"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Tải file thực đơn</span>
+              </button>
+            </div>
+          ) : activeTab === 'menu' && (
             <WeeklyMenuTable
               vendors={vendors}
               selectedVendorId={selectedVendorForMenu}
               onSelectVendor={(vId) => setSelectedVendorForMenu(vId)}
-              weeklyMenu={weeklyMenu}
+              weeklyMenu={selectedVendorWeekMenu}
               onUpdateShiftMenu={(dayIdx, shiftKey, updatedDetail) => {
-                setWeeklyMenu(prev => {
-                  const updated = [...prev];
-                  updated[dayIdx] = {
-                    ...updated[dayIdx],
-                    [shiftKey]: updatedDetail
-                  };
-                  return updated;
-                });
-                // Ghi song song vào CSDL supplier_menus — CỦA CHÍNH NCC SỞ HỮU ma trận (isolated)
-                updateVendorShiftDetail(matrixOwnerVendorId, dayIdx, shiftKey, updatedDetail);
+                // Ghi vào slot RIÊNG của NCC đang chọn trong CSDL supplier_menus (isolated) —
+                // KHÔNG đụng ma trận kiểm định, KHÔNG đụng NCC khác
+                updateVendorShiftDetail(selectedVendorForMenu, dayIdx, shiftKey, updatedDetail);
+                showToast(`Đã cập nhật thực đơn của ${vendors.find(v => v.id === selectedVendorForMenu)?.name || 'NCC'}!`);
               }}
               onClearShiftMenu={(dayIdx, shiftKey) => {
-                const targetDay = weeklyMenu[dayIdx];
-                if (confirm(`Bạn có chắc muốn xóa món ăn ${shiftKey.toUpperCase()} của ${targetDay.dayOfWeek}?`)) {
-                  setWeeklyMenu(prev => {
-                    const updated = [...prev];
-                    updated[dayIdx] = {
-                      ...updated[dayIdx],
-                      [shiftKey]: {
-                        meatDishes: [],
-                        meatDessert: '',
-                        vegDishes: [],
-                        vegDessert: ''
-                      }
-                    };
-                    return updated;
-                  });
-                  updateVendorShiftDetail(matrixOwnerVendorId, dayIdx, shiftKey, {
+                const targetDay = selectedVendorWeekMenu[dayIdx];
+                const vendorName = vendors.find(v => v.id === selectedVendorForMenu)?.name || 'NCC';
+                if (confirm(`Bạn có chắc muốn xóa món ăn ${shiftKey.toUpperCase()} của ${targetDay.dayOfWeek} (${vendorName})?`)) {
+                  updateVendorShiftDetail(selectedVendorForMenu, dayIdx, shiftKey, {
                     meatDishes: [],
                     meatDessert: '',
                     vegDishes: [],
                     vegDessert: ''
                   });
-                  showToast(`Đã xóa món ca này thành công!`);
+                  showToast(`Đã xóa món ca này của ${vendorName}!`);
                 }
               }}
               onLoadIntoReport={(dayOfWeek, dateStr, shiftKey, mealDetail) => {
@@ -2868,26 +2915,38 @@ export default function MealsApp() {
                   dinner: 'Bữa tối'
                 };
                 const newShift = shiftMap[shiftKey] || 'Bữa tối';
-                setReportShift(newShift);
 
                 // 2. Chuyển ngày tương ứng
                 const foundDay = weekDays.find(w => w.dayOfWeek === dayOfWeek);
+                const targetDayIdx = foundDay ? weekDays.indexOf(foundDay) : reportDayIdx;
+
+                // 3. B1.4 — NẾU sẽ ghi đè slot đã có dữ liệu KHÁC → xác nhận nêu rõ nội dung bị thay
+                const vendorName = vendors.find(v => v.id === selectedVendorForMenu)?.name || 'NCC';
+                const existing = getShiftDetail(supplierMenus, selectedVendorForMenu, weekStartDate, targetDayIdx, shiftKeyFromDayKey(shiftKey));
+                const incoming: ShiftMealDetail = JSON.parse(JSON.stringify(mealDetail));
+                const willReplace = Boolean(existing && JSON.stringify(existing) !== JSON.stringify(incoming));
+                if (willReplace) {
+                  const ok = confirm(
+                    `"Nạp vào báo cáo" sẽ GHI ĐÈ thực đơn riêng của ${vendorName} — ${dayOfWeek} (${newShift}):\n\n` +
+                    `• Hiện tại: ${describeMealDetail(existing)}\n` +
+                    `• Sẽ thay bằng: ${describeMealDetail(incoming)}\n\n` +
+                    `Tiếp tục?`
+                  );
+                  if (!ok) return;
+                }
+
+                setReportShift(newShift);
                 if (foundDay) {
                   setReportDate(foundDay.isoDate);
                 }
 
-                // 3. Điền sẵn vào CSDL supplier_menus cho NCC đang xem (ngày + ca tương ứng)
+                // 4. Ghi vào slot RIÊNG của NCC đang chọn (ngày + ca tương ứng) — không đụng NCC khác
                 setActiveVendorForEdit(selectedVendorForMenu);
-                updateVendorShiftDetail(
-                  selectedVendorForMenu,
-                  foundDay ? weekDays.indexOf(foundDay) : reportDayIdx,
-                  shiftKey,
-                  JSON.parse(JSON.stringify(mealDetail))
-                );
+                updateVendorShiftDetail(selectedVendorForMenu, targetDayIdx, shiftKey, incoming);
 
-                // 4. Chuyển tab sang Báo cáo suất ăn
+                // 5. Chuyển tab sang Báo cáo suất ăn
                 setActiveTab('report');
-                showToast(`Đã nạp thực đơn ${dayOfWeek} (${newShift}) của ${vendors.find(v => v.id === selectedVendorForMenu)?.name} sang Báo cáo!`);
+                showToast(`Đã nạp thực đơn ${dayOfWeek} (${newShift}) của ${vendorName} sang Báo cáo!`);
               }}
               onToast={showToast}
             />
@@ -3249,7 +3308,7 @@ export default function MealsApp() {
           <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b pb-3">
               <h3 className="font-bold text-sm text-slate-900">
-                Chỉnh sửa món ăn ({weeklyMenu[showEditMealModal.dayIdx]?.dayOfWeek} - {showEditMealModal.shiftKey.toUpperCase()})
+                Chỉnh sửa món ăn ({inspectionMatrix[showEditMealModal.dayIdx]?.dayOfWeek} - {showEditMealModal.shiftKey.toUpperCase()})
               </h3>
               <button onClick={() => setShowEditMealModal(null)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
@@ -3312,9 +3371,9 @@ export default function MealsApp() {
               </button>
               <button
                 onClick={() => {
-                  const updatedMenu = [...weeklyMenu];
+                  const updatedMenu = [...inspectionMatrix];
                   updatedMenu[showEditMealModal.dayIdx][showEditMealModal.shiftKey] = showEditMealModal.detail;
-                  setWeeklyMenu(updatedMenu);
+                  setInspectionMatrix(updatedMenu);
                   // Ghi song song vào CSDL supplier_menus của NCC đang xem ma trận
                   updateVendorShiftDetail(matrixOwnerVendorId, showEditMealModal.dayIdx, showEditMealModal.shiftKey, showEditMealModal.detail);
                   setShowEditMealModal(null);
@@ -3335,7 +3394,7 @@ export default function MealsApp() {
           open
           onClose={() => setAutomationWizard(null)}
           weekStartDate={weekStartDate}
-          currentMenu={weeklyMenu}
+          currentMenu={inspectionMatrix}
           onApply={handleWizardApply}
           lockedVendorId={automationWizard.lockedVendorId}
           lockedVendorName={automationWizard.lockedVendorName}
