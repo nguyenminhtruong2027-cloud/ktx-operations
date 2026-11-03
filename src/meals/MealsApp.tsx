@@ -67,6 +67,15 @@ import MenuUploadWizard from './components/MenuUploadWizard';
 import type { WizardApplyPayload } from './components/MenuUploadWizard';
 import VendorWorkspace from './components/VendorWorkspace';
 import SupplierFileArchive from './components/SupplierFileArchive';
+import MenuFilePanel from './components/MenuFilePanel';
+import { broadcastMenuSync, subscribeMenuSync } from './menuSyncBus';
+import {
+  startCloudSync,
+  getCloudStatus,
+  mergeSupplierMenus,
+  mergeArchives,
+  type CloudSyncStatus
+} from './cloudSync';
 import type { VendorPortionCheckResult } from './supplierMenuStore';
 import {
   APPLY_MODES,
@@ -213,6 +222,44 @@ export default function MealsApp() {
   useEffect(() => {
     saveStore(supplierMenus);
   }, [supplierMenus]);
+
+  // ===== EVENT BUS: đồng bộ realtime giữa các tab/cửa sổ khi dữ liệu thực đơn thay đổi =====
+  // Trong app: mọi tab cùng cây React tự cập nhật ngay (React state); liên cửa sổ/module khác:
+  // lắng nghe tín hiệu bus + 'storage' rồi nạp lại từ localStorage (CHỈ ĐỌC — không ghi/xóa gì).
+  useEffect(() => {
+    return subscribeMenuSync((kind, fromSelf) => {
+      if (fromSelf) return;
+      if (kind === 'supplier_menus' || kind === 'menu-apply') {
+        setSupplierMenus(loadStore());
+      }
+      if (kind === 'archives' || kind === 'menu-apply') {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEYS.ARCHIVES);
+          if (raw) setArchives(JSON.parse(raw));
+        } catch { /* ignore */ }
+      }
+    });
+  }, []);
+
+  // Panel Quản lý Tệp thực đơn — mở được từ MỌI tab (nút ở header khu làm việc)
+  const [menuFilePanelOpen, setMenuFilePanelOpen] = useState(false);
+
+  // ===== B3: ĐỒNG BỘ ĐÁM MÂY (Firestore hybrid — fallback an toàn về localStorage) =====
+  // Merge 1 chiều, không bao giờ làm mất dữ liệu cục bộ; khi Firebase chưa cấu hình/mất mạng
+  // thì app vẫn chạy hoàn toàn trên localStorage như trước.
+  const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus>(() => getCloudStatus());
+  useEffect(() => {
+    const stop = startCloudSync({
+      onSupplierMenus: (remote) => setSupplierMenus(prev => mergeSupplierMenus(prev, remote)),
+      onArchives: (remote) => setArchives(prev => mergeArchives(prev, remote))
+    });
+    setCloudStatus(getCloudStatus());
+    const timer = setInterval(() => setCloudStatus(getCloudStatus()), 30000);
+    return () => {
+      clearInterval(timer);
+      stop();
+    };
+  }, []);
 
   // Phân khu KTX động (người dùng tự tích chọn — không còn gán cứng)
   const [ktxZones, setKtxZones] = useState<KtxZones>(() => {
@@ -375,6 +422,7 @@ export default function MealsApp() {
     fileId?: string
   ) => {
     setSupplierMenus(prev => importWeeklyMenu(prev, vendorId, weekStart, menu, source, fileId));
+    broadcastMenuSync('supplier_menus');
   };
 
   // Ghi tay ca ăn của 1 NCC vào CSDL (Khối 2 báo cáo / nạp từ ma trận tuần / modal sửa món)
@@ -393,6 +441,7 @@ export default function MealsApp() {
       detail,
       source: 'manual'
     }));
+    broadcastMenuSync('supplier_menus');
   };
 
   // Áp dụng kết quả wizard trích xuất: ghi theo giao dịch + lưu lịch sử archive
@@ -431,6 +480,7 @@ export default function MealsApp() {
     );
 
     showToast(`Đã áp dụng "${modeLabel}": +${payload.diff.addedCount} món mới, −${payload.diff.removedCount} món bỏ. Có thể hoàn tác trong 30 phút.`);
+    broadcastMenuSync('menu-apply');
   };
 
   const handleUndoApply = () => {
@@ -653,6 +703,7 @@ export default function MealsApp() {
       target.id
     );
     showToast(`Đã nạp và áp dụng thực đơn: ${target.fileName} (${target.dateRange})`);
+    broadcastMenuSync('menu-apply');
   };
 
   // Mở modal xác nhận xóa trực tiếp file (không dùng window.confirm)
@@ -677,6 +728,7 @@ export default function MealsApp() {
     }
     setFileToDelete(null);
     showToast(`Đã xóa vĩnh viễn file "${fileName}" khỏi hệ thống!`);
+    broadcastMenuSync('archives');
   };
 
   // Lưu thực đơn hiện tại thành file lưu trữ
@@ -705,6 +757,7 @@ export default function MealsApp() {
     setArchives(prev => [newArchive, ...prev.map(f => ({ ...f, isActive: false }))]);
     syncStoreMenu(newArchive.vendorId, weekStartDate, inspectionMatrix, 'archive', newFileId);
     showToast('Đã lưu trữ thực đơn vào danh sách file thành công!');
+    broadcastMenuSync('menu-apply');
   };
 
   // Yêu cầu dọn dẹp các file cũ hơn 90 ngày (~3 tháng)
@@ -776,6 +829,7 @@ export default function MealsApp() {
 
     const dishCount = totalDishesOfResult(result);
     showToast(`Đã đọc ${file.name}: ${dishCount} món trên ${menu.length * 3} ca${result.warnings.length ? ` • ${result.warnings.length} cảnh báo cần rà` : ''}.`);
+    broadcastMenuSync('menu-apply');
   };
 
   const processInspectionFile = async (file: File) => {
@@ -894,13 +948,16 @@ export default function MealsApp() {
   }, [weekStartDate]);
 
   // Upload đa định dạng vào Lưu trữ File theo NCC — NCC + Tuần do người dùng chỉ định
-  const processArchiveUpload = async (file: File) => {
+  // (override dùng cho MenuFilePanel — đích danh NCC/tuần từ panel, không phụ thuộc state cục bộ)
+  const processArchiveUpload = async (file: File, override?: { vendorId?: string; weekStart?: string }) => {
+    const targetVendor = override?.vendorId || archiveUploadVendor;
+    const targetWeek = override?.weekStart || archiveUploadWeek;
     const lower = file.name.toLowerCase();
     const isImage = file.type.startsWith('image/');
     const isPdf = file.type === 'application/pdf' || lower.endsWith('.pdf');
     const isSheet = ['.xlsx', '.xls', '.ods', '.csv'].some(ext => lower.endsWith(ext));
     const isText = lower.endsWith('.txt') || file.type.startsWith('text/');
-    const vendorName = vendors.find(v => v.id === archiveUploadVendor)?.name || 'Tám Phương';
+    const vendorName = vendors.find(v => v.id === targetVendor)?.name || 'Tám Phương';
 
     setPendingFile(file);
     setFileIssue(null);
@@ -912,14 +969,14 @@ export default function MealsApp() {
       if (isImage || isPdf) {
         showToast(`Đang trích xuất ${file.name} bằng AI cho ${vendorName}...`);
         result = await extractMenuWithGemini(file, {
-          weekStartDate: archiveUploadWeek,
+          weekStartDate: targetWeek,
           supplierHint: vendorName,
-          targetSupplierId: archiveUploadVendor
+          targetSupplierId: targetVendor
         });
       } else if (isSheet) {
-        result = await parseExcelOrCsvFile(file, archiveUploadWeek, archiveUploadVendor);
+        result = await parseExcelOrCsvFile(file, targetWeek, targetVendor);
       } else if (isText) {
-        result = await parsePlainTextMenu(await file.text(), archiveUploadWeek, archiveUploadVendor);
+        result = await parsePlainTextMenu(await file.text(), targetWeek, targetVendor);
       } else {
         const extMatch = lower.match(/\.([a-z0-9]+)$/);
         throw new StructuredFileError(
@@ -935,7 +992,7 @@ export default function MealsApp() {
           ['Bảng cần có nhãn ca/ngày hoặc cột món; thử "Chọn cột thủ công" hoặc dùng ảnh/PDF với AI.']
         );
       }
-      applyInspectionResult(result, file, isImage || isPdf ? 'ai' : isSheet ? 'excel' : 'text', archiveUploadVendor);
+      applyInspectionResult(result, file, isImage || isPdf ? 'ai' : isSheet ? 'excel' : 'text', targetVendor);
       if (parseDateSafe(weekStartDate).getTime() !== parseDateSafe(result.weekStartDate).getTime()) {
         setWeekStartDate(result.weekStartDate);
       }
@@ -955,6 +1012,18 @@ export default function MealsApp() {
     setArchives(prev => prev.map(f => ({ ...f, isActive: f.id === fileId })));
     syncStoreMenu(target.vendorId || 'tam-phuong', monday, target.menu, 'archive', target.id);
     showToast(`Đã kích hoạt kiểm định: ${target.fileName} — dữ liệu giữ nguyên, không bị reset.`);
+    broadcastMenuSync('menu-apply');
+  };
+
+  // ===== Handlers cho MenuFilePanel — mở được từ MỌI tab =====
+  const handlePanelUpload = (file: File, vendorId: string, weekStart: string) => {
+    showToast(`Đang đọc ${file.name} cho NCC đã chọn trong panel...`);
+    void processArchiveUpload(file, { vendorId, weekStart });
+  };
+
+  const handlePanelApplyFile = (fileId: string) => {
+    activateArchive(fileId);
+    setMenuFilePanelOpen(false);
   };
 
   // Tải về thực đơn của file (JSON)
@@ -1241,6 +1310,24 @@ export default function MealsApp() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
               <RealtimeClock compact />
               <div className="flex items-center space-x-2.5">
+              <span
+                className={`px-2.5 py-1 rounded-xl text-[10px] font-bold border ${
+                  cloudStatus.enabled
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                }`}
+                title={cloudStatus.reason + (cloudStatus.lastError ? ` — lỗi gần nhất: ${cloudStatus.lastError}` : '')}
+              >
+                {cloudStatus.enabled ? '☁ Đang đồng bộ đám mây' : `☁ Lưu cục bộ — ${cloudStatus.reason}`}
+              </span>
+              <button
+                onClick={() => setMenuFilePanelOpen(true)}
+                className="px-3 py-1.5 bg-gradient-to-r from-(--vc-accent-1) to-(--vc-accent-2) text-slate-950 font-bold text-xs rounded-xl transition flex items-center space-x-1.5 shadow-sm hover:brightness-105"
+                title="Quản lý tệp thực đơn — mở từ mọi tab"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                <span>Tệp thực đơn ({archives.length})</span>
+              </button>
               <button
                 onClick={() => {
                   // LÀM MỚI giao diện từ dữ liệu MỚI NHẤT — tuyệt đối không rollback về dữ liệu cũ
@@ -3387,6 +3474,20 @@ export default function MealsApp() {
           </div>
         </div>
       )}
+
+      {/* PANEL: QUẢN LÝ TỆP THỰC ĐƠN — mở được từ MỌI tab */}
+      <MenuFilePanel
+        open={menuFilePanelOpen}
+        onClose={() => setMenuFilePanelOpen(false)}
+        archives={archives}
+        vendors={vendors}
+        weekOptions={archiveWeekOptions}
+        defaultWeek={weekStartDate}
+        onUploadFile={handlePanelUpload}
+        onApplyFile={handlePanelApplyFile}
+        onPreviewFile={(f) => setPreviewArchiveFile(f)}
+        onDeleteFile={(f) => setFileToDelete(f)}
+      />
 
       {/* MODAL: TỰ ĐỘNG HÓA BÁO CÁO — Wizard 4 bước trích xuất thực đơn AI */}
       {automationWizard && (
