@@ -1,0 +1,6 @@
+{
+  "name": "Hệ thống điều hành công việc vận hành VINCONS",
+  "description": "Ứng dụng quản lý công việc hằng ngày của Chuyên viên Vận hành tại các khu lán trại/ký túc xá công nhân VINCONS",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

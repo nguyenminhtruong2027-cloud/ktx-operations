@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+/* ===================== CẤU HÌNH TOKEN: 4 CHỦ ĐỀ GIAO DIỆN ===================== */
+:root,
+[data-theme="navy"] {
+  --vc-brand-0: #0f1733;
+  --vc-brand-1: #141e42;
+  --vc-brand-2: #223c82;
+  --vc-brand-3: #2f55b0;
+  --vc-accent-1: #fbbf24;
+  --vc-accent-2: #f97316;
+  --vc-page-bg: #f1f5f9;
+  --vc-fg: #1e293b;
+}
+[data-theme="forest"] {
+  --vc-brand-0: #082112;
+  --vc-brand-1: #0b2b1a;
+  --vc-brand-2: #14532d;
+  --vc-brand-3: #2b7a44;
+  --vc-accent-1: #86efac;
+  --vc-accent-2: #22c55e;
+  --vc-page-bg: #f1f8f2;
+  --vc-fg: #14301e;
+}
+[data-theme="dark"] {
+  --vc-brand-0: #080d17;
+  --vc-brand-1: #0b1220;
+  --vc-brand-2: #1e293b;
+  --vc-brand-3: #384f6b;
+  --vc-accent-1: #fbbf24;
+  --vc-accent-2: #f59e0b;
+  --vc-page-bg: #0b1220;
+  --vc-fg: #e2e8f0;
+}
+[data-theme="slate"] {
+  --vc-brand-0: #111827;
+  --vc-brand-1: #1f2937;
+  --vc-brand-2: #334155;
+  --vc-brand-3: #475569;
+  --vc-accent-1: #fcd34d;
+  --vc-accent-2: #d97706;
+  --vc-page-bg: #f1f5f9;
+  --vc-fg: #1e293b;
+}
+
+@layer base {
+  body {
+    font-family: 'Be Vietnam Pro', sans-serif;
+    background-color: var(--vc-page-bg, #f8fafc);
+    color: var(--vc-fg, #1e293b);
+    transition: background-color .3s ease, color .3s ease;
+  }
+}
+
+/* ---- Chế độ tối Dark Executive: phủ tối các bề mặt & chữ phổ biến ---- */
+[data-theme="dark"] .bg-white { background-color: #141f33 !important; }
+[data-theme="dark"] .bg-slate-50 { background-color: #101928 !important; }
+[data-theme="dark"] .bg-slate-100 { background-color: #0d1525 !important; }
+[data-theme="dark"] .bg-slate-200 { background-color: #22304a !important; }
+[data-theme="dark"] .bg-blue-50,
+[data-theme="dark"] .bg-teal-50,
+[data-theme="dark"] .bg-emerald-50,
+[data-theme="dark"] .bg-amber-50,
+[data-theme="dark"] .bg-orange-50,
+[data-theme="dark"] .bg-rose-50 { background-color: rgba(255, 255, 255, 0.04) !important; }
+[data-theme="dark"] .text-slate-900 { color: #e8eefb !important; }
+[data-theme="dark"] .text-slate-800 { color: #d5deec !important; }
+[data-theme="dark"] .text-slate-700 { color: #c2cfe2 !important; }
+[data-theme="dark"] .text-slate-600 { color: #aab8cc !important; }
+[data-theme="dark"] .text-slate-500 { color: #8fa0b8 !important; }
+[data-theme="dark"] .border-slate-200 { border-color: #26345180 !important; }
+[data-theme="dark"] .border-slate-100 { border-color: #26345150 !important; }
+[data-theme="dark"] .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #26345150 !important; }
+[data-theme="dark"] .hover\:bg-slate-50:hover { background-color: #14203a !important; }
+[data-theme="dark"] .hover\:bg-slate-100:hover { background-color: #1a2540 !important; }
+[data-theme="dark"] .hover\:bg-slate-200:hover { background-color: #26344d !important; }
+
+/* Ẩn spinner gốc của ô số — ta tự vẽ nút tăng/giảm cho rõ ràng */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Chiếc thanh nhấn thương hiệu (cam ấm → brand) */
+.vc-accent-bar {
+  background: linear-gradient(90deg, var(--vc-accent-1, #fbbf24) 0%, var(--vc-accent-2, #f97316) 50%, var(--vc-brand-2, #223c82) 100%);
+}
+
+/* Ẩn spinner gốc của ô số — ta tự vẽ nút tăng/giảm cho rõ ràng */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type=number] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Chiếc thanh nhấn vàng cam xuyên suốt theo brand VINCONS */
+.vc-accent-bar {
+  background: linear-gradient(90deg, #fbbf24 0%, #f97316 50%, #223c82 100%);
+}
+
+/* Custom scrollbar and animations */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
