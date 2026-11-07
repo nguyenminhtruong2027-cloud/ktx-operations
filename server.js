@@ -21,68 +21,60 @@ const app = express();
 app.use(express.json({ limit: '60mb' }));
 
 // ---------- Prompt & responseSchema ----------
-const PROMPT = `Bạn là máy trích xuất thực đơn từ tài liệu (ảnh chụp hoặc PDF) của nhà ăn Vincons.
-Nhiệm vụ: đọc toàn bộ nội dung và trích xuất thực đơn theo tuần.
+const PROMPT = `Bạn là máy trích xuất thực đơn từ tài liệu (ảnh chụp hoặc PDF) của nhà ăn VINCONS.
+Chỉ trả JSON theo schema, không bịa món, ô không đọc được để rỗng.
 
 QUY TẮC:
-- Xuất chính xác những gì có trong tài liệu, KHÔNG bịa thêm món, KHÔNG suy đoán.
-- days luôn có đủ 7 phần tử theo thứ tự Thứ 2 -> Chủ nhật, ngay cả khi trống (mảng rỗng).
-- Mỗi ngày có 3 bữa: sang (ăn nhẹ/bữa sáng), trua (bữa chính/bữa trưa), toi (bữa tối/tăng ca). Bữa không có trong tài liệu để mảng rỗng.
-- Món mặn (có thịt/cá/đạm) vào "man", món chay (rau/rau muống/đậu hũ...) vào "chay" của từng bữa. Tráng miệng đi vào trangMiengMan / trangMiengChay.
-- Với mỗi món: "name" là tên món SẠCH (bỏ số thứ tự, định lượng); "raw" là dòng gốc có đủ định lượng nếu hiển thị (VD: "Vịt kho chao (Vịt 55–65g · Nước sốt 15-20g)"); "confidence" là độ tin cậy đọc 0..1 (chữ mờ/nghi ngờ < 0.5).
-- supplier: tên nhà cung cấp thực đơn nếu hiện trong tài liệu (VD: Cơm Việt Story, Tám Phương, Hương Ngọc Phát...). Không thấy thì để chuỗi rỗng.
-- weekNote: đoạn văn bản ngày/tuần ("duy nhất từ ngày... đến ngày...", "Tuần: ...") hiển thị trong tài liệu, không có thì rỗng.
-- Ngày tháng: nếu tài liệu ghi rõ ngày (dd/mm/yyyy) thì điền isoDate sang định dạng yyyy-mm-dd, không có thì rỗng.
-- Dùng đúng từ tiếng Việt trong tài liệu, giữ nguyên dấu tiếng Việt.`;
+- ncc: mã nhà cung cấp nếu nhận ra (TP=Tám Phương, LD=Lim Dương, ML=Minh Long Food, VS=Vina Story, NS=Nguyên Sài Gòn, HN=Hương Ngọc Phát, TH=Thiên Hồng Phúc), không rõ để "TP".
+- tuanTu, tuanDen: ngày bắt đầu (Thứ 2) và kết thúc (Chủ nhật) định dạng "dd/mm/yyyy".
+- loai: "chay" nếu là thực đơn chay, ngược lại "man".
+- ngay: luôn có đủ 7 phần tử theo thứ tự T2, T3, T4, T5, T6, T7, CN.
+  * ma: "T2" | "T3" | "T4" | "T5" | "T6" | "T7" | "CN"
+  * ngayThang: "dd/mm/yyyy"
+  * sang: { mon: "tên món", thanhPhan: "nguyên văn các thành phần và gram" }
+  * trua: mảng 7 phần tử { ten, tl } (r1,r2=món chính; r3=món phụ; r4=rau; r5=canh; r6=cơm; r7=tráng miệng). "tl" giữ NGUYÊN VĂN chuỗi trọng lượng.
+  * toi: mảng 7 phần tử { ten, tl } tương tự.
+- batThuongFile: mảng các ghi chú bất thường nếu có (ngày sai, chữ mờ, lỗi chính tả).`;
 
-const DISH_SCHEMA = {
+const DISH_ROW_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    name: { type: 'STRING' },
-    raw: { type: 'STRING' },
-    confidence: { type: 'NUMBER' }
+    ten: { type: 'STRING' },
+    tl: { type: 'STRING' }
   },
-  required: ['name', 'raw', 'confidence']
+  required: ['ten', 'tl']
 };
 
-const SHIFT_SCHEMA = {
+const DAY_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    man: { type: 'ARRAY', items: DISH_SCHEMA },
-    chay: { type: 'ARRAY', items: DISH_SCHEMA },
-    trangMiengMan: { type: 'STRING' },
-    trangMiengChay: { type: 'STRING' }
+    ma: { type: 'STRING' },
+    ngayThang: { type: 'STRING' },
+    sang: {
+      type: 'OBJECT',
+      properties: {
+        mon: { type: 'STRING' },
+        thanhPhan: { type: 'STRING' }
+      },
+      required: ['mon', 'thanhPhan']
+    },
+    trua: { type: 'ARRAY', items: DISH_ROW_SCHEMA },
+    toi: { type: 'ARRAY', items: DISH_ROW_SCHEMA }
   },
-  required: ['man', 'chay', 'trangMiengMan', 'trangMiengChay']
+  required: ['ma', 'ngayThang', 'sang', 'trua', 'toi']
 };
 
 const RESPONSE_SCHEMA = {
   type: 'OBJECT',
   properties: {
-    supplier: { type: 'STRING' },
-    weekNote: { type: 'STRING' },
-    days: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          dayLabel: { type: 'STRING' },
-          isoDate: { type: 'STRING' },
-          shifts: {
-            type: 'OBJECT',
-            properties: {
-              sang: SHIFT_SCHEMA,
-              trua: SHIFT_SCHEMA,
-              toi: SHIFT_SCHEMA
-            },
-            required: ['sang', 'trua', 'toi']
-          }
-        },
-        required: ['dayLabel', 'isoDate', 'shifts']
-      }
-    }
+    ncc: { type: 'STRING' },
+    tuanTu: { type: 'STRING' },
+    tuanDen: { type: 'STRING' },
+    loai: { type: 'STRING' },
+    ngay: { type: 'ARRAY', items: DAY_SCHEMA },
+    batThuongFile: { type: 'ARRAY', items: { type: 'STRING' } }
   },
-  required: ['supplier', 'weekNote', 'days']
+  required: ['ncc', 'tuanTu', 'tuanDen', 'loai', 'ngay', 'batThuongFile']
 };
 
 // ---------- Endpoint ----------

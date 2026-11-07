@@ -97,29 +97,6 @@ export default function Navbar({
 
           {/* Desktop Right Actions */}
           <div className="hidden md:flex items-center space-x-2.5">
-            {/* Generate Tasks Button */}
-            {currentUser.role === 'manager' && activeModule === 'tasks' && (
-              <button
-                onClick={onGenerateTodayTasks}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/20 backdrop-blur text-xs font-bold rounded-xl transition shadow-sm border border-white/15"
-                title="Tạo phiếu việc tự động cho ngày hôm nay từ mẫu checklist"
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-blue-200" />
-                <span>Sinh phiếu việc</span>
-              </button>
-            )}
-
-            {/* Shift Handover Button */}
-            {activeModule === 'tasks' && (
-              <button
-                onClick={onOpenHandover}
-                className="flex items-center space-x-1.5 px-3.5 py-2 bg-gradient-to-r from-(--vc-accent-1) to-(--vc-accent-2) hover:brightness-110 text-slate-950 text-xs font-bold rounded-xl transition shadow-md"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>Bàn giao ca</span>
-              </button>
-            )}
-
             {/* Theme Switcher */}
             <div className="relative">
               <button
